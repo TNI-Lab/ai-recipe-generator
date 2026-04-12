@@ -1,0 +1,74 @@
+name: I-80 Reno-Palisades monitor
+
+# Polls Caltrans (and optionally Google Maps) every ~5 minutes and pushes
+# an ntfy notification when the road reopens. Runs entirely on GitHub's
+# runners — no personal machine required.
+#
+# Setup (one-time, all on your phone):
+#   1. Install the "ntfy" app (iOS or Android, free).
+#   2. In the app, subscribe to a hard-to-guess topic, e.g.
+#         i80-reno-alerts-7f3a9c
+#      (pick your own; anyone who knows the topic can send you notifications).
+#   3. In this GitHub repo -> Settings -> Secrets and variables -> Actions:
+#         New repository secret: NTFY_TOPIC = i80-reno-alerts-7f3a9c
+#      (Optional) GOOGLE_MAPS_API_KEY for a second data source using drive
+#      time. Any Google Cloud project with Routes API enabled works.
+#   4. Done. You'll get a push notification on your phone the first time the
+#      script sees a CLOSED -> OPEN transition.
+
+on:
+  schedule:
+    # GitHub's minimum cron cadence is 5 minutes; actual firing may be
+    # delayed a few minutes during high runner load.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: i80-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Restore the persisted road-state file from the last run so we can
+      # detect the CLOSED -> OPEN transition across separate workflow runs.
+      - name: Restore monitor state
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          key: i80-monitor-state-v1-${{ github.run_id }}
+          restore-keys: |
+            i80-monitor-state-v1-
+
+      - name: Run one check
+        env:
+          STATE_DIR: ${{ github.workspace }}/.monitor-state
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GOOGLE_MAPS_BASELINE_SECONDS: ${{ vars.GOOGLE_MAPS_BASELINE_SECONDS }}
+          GOOGLE_MAPS_CLOSURE_RATIO: ${{ vars.GOOGLE_MAPS_CLOSURE_RATIO }}
+        run: |
+          mkdir -p "$STATE_DIR"
+          node scripts/i80-monitor.mjs --once
+
+      # Save the updated state so the next scheduled run can read it. Each
+      # key is unique (includes run_id) which forces a save on every run;
+      # restore-keys prefix-matches the most recent save.
+      - name: Save monitor state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: i80-monitor-state-v1-${{ github.run_id }}

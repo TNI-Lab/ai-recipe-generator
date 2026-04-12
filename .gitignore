@@ -27,3 +27,6 @@ dist-ssr
 .amplify
 amplify_outputs*
 amplifyconfiguration*
+
+# i80 monitor runtime state (written by scripts/i80-monitor.mjs)
+.monitor-state/
